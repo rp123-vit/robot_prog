@@ -1,0 +1,591 @@
+Publisher:
+#!/usr/bin/env python3
+import rospy
+from std_msgs.msg import Float32
+import random
+
+def distance_publisher():
+    rospy.init_node('distance_publisher_node', anonymous=True)
+    pub = rospy.Publisher('/distance_sensor', Float32, queue_size=10)
+    rate = rospy.Rate(2)
+    rospy.loginfo("Distance Publisher node started.")
+    while not rospy.is_shutdown():
+        distance = random.uniform(0.1, 3.0)
+        pub.publish(distance)
+        rate.sleep()
+
+if __name__ == '__main__':
+    try:
+        distance_publisher()
+    except rospy.ROSInterruptException:
+        pass
+
+Subscriber:
+#!/usr/bin/env python3
+import rospy
+from std_msgs.msg import Float32
+
+OBSTACLE_THRESHOLD = 0.5
+
+def distance_callback(msg):
+    distance = msg.data
+    if distance < OBSTACLE_THRESHOLD:
+        rospy.logwarn(f"[WARNING] Obstacle detected! Distance: {distance:.2f}m")
+    else:
+        rospy.loginfo(f"[INFO] Path is clear. Distance: {distance:.2f}m")
+
+def obstacle_detector():
+    rospy.init_node('obstacle_detector_node', anonymous=True)
+    rospy.loginfo("Obstacle Detector node started.")
+    rospy.Subscriber('/distance_sensor', Float32, distance_callback)
+    rospy.spin()
+
+if __name__ == '__main__':
+    obstacle_detector()
+
+Publisher2:
+##!/usr/bin/env python3
+import rospy
+import random
+from drone_fleet.msg import DroneTelemetry
+from geometry_msgs.msg import Point
+def publisher(drone_name):
+    pub = rospy.Publisher(f'/{drone_name}/telemetry', DroneTelemetry, queue_size=10)
+    rospy.init_node(f'{drone_name}_telemetry_publisher', anonymous=True)
+    rate = rospy.Rate(1)  # 1 Hz
+    while not rospy.is_shutdown():
+        msg = DroneTelemetry()
+        msg.drone_id = drone_name
+        msg.position = Point()
+        msg.position.x = random.uniform(0, 100)
+        msg.position.y = random.uniform(0, 100)
+        msg.position.z = random.uniform(0, 20)
+        msg.battery_level = random.uniform(0, 100)
+        msg.is_emergency = random.choice([False, False, False, True])  # mostly False
+        pub.publish(msg)
+        rate.sleep()
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: drone_publisher.py drone_name")
+    else:
+        publisher(sys.argv[1])
+
+Subscriber2:
+#!/usr/bin/env python3
+import rospy
+from drone_fleet.msg import DroneTelemetry
+def callback(msg):
+    if msg.battery_level < 20 or msg.is_emergency:
+        print(f"[WARN] Drone {msg.drone_id}: Battery {msg.battery_level:.1f}%, Emergency: {msg.is_emergency}")
+def generic_subscriber(topic_name):
+    rospy.Subscriber(topic_name, DroneTelemetry, callback)
+if __name__ == '__main__':
+    import sys
+    rospy.init_node('fleet_monitor_node', anonymous=True)
+    drone_count = int(rospy.get_param('~drone_count', 3))
+    for i in range(1, drone_count+1):
+        topic = f"/drone{i}/telemetry"
+        generic_subscriber(topic)
+    rospy.spin()
+
+
+server:
+#!/usr/bin/env python
+import rospy
+from speed_control.srv import SetSpeed, SetSpeedResponse
+def handle_set_speed(req):
+    rospy.loginfo("Received speed request: linear=%.2f, angular=%.2f", req.linear, req.angular)
+    return SetSpeedResponse(success=True, message="Speed set successfully!")
+def speed_server():
+    rospy.init_node('speed_server')
+    srv = rospy.Service('set_speed', SetSpeed, handle_set_speed)
+    rospy.loginfo("Speed server ready.")
+    rospy.spin()
+if __name__ == "__main__":
+    speed_server()
+
+Client:
+#!/usr/bin/env python
+import rospy
+from speed_control.srv import SetSpeed
+
+def speed_client():
+    rospy.init_node('speed_client')
+    rospy.wait_for_service('set_speed')
+    try:
+        set_speed = rospy.ServiceProxy('set_speed', SetSpeed)
+        linear = float(input("Enter linear speed: "))
+        angular = float(input("Enter angular speed: "))
+        resp = set_speed(linear, angular)
+        print("Success:", resp.success)
+        print("Message:", resp.message)
+    except rospy.ServiceException as e:
+        print("Service call failed:", e)
+
+if __name__ == "__main__":
+    speed_client()
+
+simple_action_server.py
+#!/usr/bin/env python
+import rospy
+import time
+import actionlib
+from basics.msg import TimerAction, TimerGoal, TimerResult
+
+def do_timer(goal):
+    start_time = time.time()
+    time.sleep(goal.time_to_wait.to_sec())
+    
+    result = TimerResult()
+    result.time_elapsed = rospy.Duration.from_sec(time.time() - start_time)
+    result.updates_sent = 0
+    
+    server.set_succeeded(result)
+
+rospy.init_node('timer_action_server')
+server = actionlib.SimpleActionServer('timer', TimerAction, do_timer, False)
+server.start()
+rospy.spin()
+
+
+simple_action_client.py
+#!/usr/bin/env python
+import rospy
+import actionlib
+from basics.msg import TimerAction, TimerGoal, TimerResult
+
+rospy.init_node('timer_action_client')
+client = actionlib.SimpleActionClient('timer', TimerAction)
+client.wait_for_server()
+
+goal = TimerGoal()
+goal.time_to_wait = rospy.Duration.from_sec(5.0)
+
+client.send_goal(goal)
+client.wait_for_result()
+
+print('Time elapsed: %f' % (client.get_result().time_elapsed.to_sec()))
+
+pick_place_server.py:
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import time
+from pick_place_robot.msg import PickPlaceAction, PickPlaceFeedback, PickPlaceResult
+from geometry_msgs.msg import Pose
+
+class PickPlaceServer:
+    def __init__(self):
+        # Initialize the action server
+        self.server = actionlib.SimpleActionServer('pick_place_action', PickPlaceAction, self.execute_callback,
+            False
+        )
+        
+        # Start the server
+        self.server.start()
+        rospy.loginfo("Pick and Place Action Server Started")
+        
+    def execute_callback(self, goal):
+        """Execute the pick and place action"""
+        rospy.loginfo(f"Received goal: Object '{goal.object_name}' to position ({goal.target_pose.position.x}, {goal.target_pose.position.y}, {goal.target_pose.position.z})")
+        
+        # Initialize feedback and result messages
+        feedback = PickPlaceFeedback()
+        result = PickPlaceResult()
+        
+        # Phase 1: Approaching the object
+        feedback.current_phase = "Approaching object"
+        feedback.progress_percentage = 10.0
+        self.server.publish_feedback(feedback)
+        rospy.loginfo("Feedback: Approaching object")
+        
+        # Simulate approaching time
+        for i in range(5):
+            if self.server.is_preempt_requested():
+                rospy.loginfo("Action cancelled during approaching phase")
+                self.server.set_preempted()
+                return
+            time.sleep(0.5)
+            feedback.progress_percentage = 10.0 + (i + 1) * 5.0
+            self.server.publish_feedback(feedback)
+        
+        # Phase 2: Grasping the object
+        feedback.current_phase = "Grasping object"
+        feedback.progress_percentage = 35.0
+        self.server.publish_feedback(feedback)
+        rospy.loginfo("Feedback: Grasping object")
+        
+        # Simulate grasping time
+        for i in range(4):
+            if self.server.is_preempt_requested():
+                rospy.loginfo("Action cancelled during grasping phase")
+                self.server.set_preempted()
+                return
+            time.sleep(0.5)
+            feedback.progress_percentage = 35.0 + (i + 1) * 7.5
+            self.server.publish_feedback(feedback)
+        
+        # Phase 3: Moving to destination
+        feedback.current_phase = "Moving to destination"
+        feedback.progress_percentage = 65.0
+        self.server.publish_feedback(feedback)
+        rospy.loginfo("Feedback: Moving to destination")
+        
+        # Simulate moving time
+        for i in range(6):
+            if self.server.is_preempt_requested():
+                rospy.loginfo("Action cancelled during moving phase")
+                self.server.set_preempted()
+                return
+            time.sleep(0.5)
+            feedback.progress_percentage = 65.0 + (i + 1) * 5.0
+            self.server.publish_feedback(feedback)
+        
+        # Phase 4: Releasing the object
+        feedback.current_phase = "Releasing object"
+        feedback.progress_percentage = 95.0
+        self.server.publish_feedback(feedback)
+        rospy.loginfo("Feedback: Releasing object")
+        
+        # Simulate releasing time
+        for i in range(2):
+            if self.server.is_preempt_requested():
+                rospy.loginfo("Action cancelled during releasing phase")
+                self.server.set_preempted()
+                return
+            time.sleep(0.5)
+            feedback.progress_percentage = 95.0 + (i + 1) * 2.5
+            self.server.publish_feedback(feedback)
+        
+        # Success
+        feedback.current_phase = "Task completed"
+        feedback.progress_percentage = 100.0
+        self.server.publish_feedback(feedback)
+        
+        result.success = True
+        result.message = f"Successfully picked and placed {goal.object_name}"
+        rospy.loginfo(f"Task completed successfully: {result.message}")
+        
+        self.server.set_succeeded(result)
+
+if __name__ == '__main__':
+    try:
+        rospy.init_node('pick_place_server')
+        server = PickPlaceServer()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Pick Place Server interrupted")
+
+
+pick_place_client.py:
+#!/usr/bin/env python3
+import rospy
+import actionlib
+import sys
+from pick_place_robot.msg import PickPlaceAction, PickPlaceGoal
+from geometry_msgs.msg import Pose, Point, Quaternion
+
+class PickPlaceClient:
+    def __init__(self):
+        # Create action client
+        self.client = actionlib.SimpleActionClient('pick_place_action', PickPlaceAction)
+        
+        # Wait for server to start
+        rospy.loginfo("Waiting for pick_place_action server...")
+        self.client.wait_for_server()
+        rospy.loginfo("Connected to pick_place_action server")
+        
+    def send_goal(self, object_name, target_x, target_y, target_z):
+        """Send a goal to the action server"""
+        # Create goal message
+        goal = PickPlaceGoal()
+        goal.object_name = object_name
+        
+        # Set target pose
+        goal.target_pose = Pose()
+        goal.target_pose.position = Point(target_x, target_y, target_z)
+        goal.target_pose.orientation = Quaternion(0, 0, 0, 1)  # No rotation
+        
+        rospy.loginfo(f"Sending goal: Pick '{object_name}' and place at ({target_x}, {target_y}, {target_z})")
+        
+        # Send goal
+        self.client.send_goal(goal, feedback_cb=self.feedback_callback)
+        
+        return self.client
+    
+    def feedback_callback(self, feedback):
+        """Callback for receiving feedback"""
+        rospy.loginfo(f"Feedback: {feedback.current_phase} - Progress: {feedback.progress_percentage:.1f}%")
+    
+    def wait_for_result(self):
+        """Wait for the action to complete"""
+        # Wait for result
+        self.client.wait_for_result()
+        
+        # Get result
+        result = self.client.get_result()
+        state = self.client.get_state()
+        
+        if state == actionlib.GoalStatus.SUCCEEDED:
+            rospy.loginfo(f"Action succeeded: {result.message}")
+            return True
+        elif state == actionlib.GoalStatus.PREEMPTED:
+            rospy.loginfo("Action was cancelled")
+            return False
+        else:
+            rospy.loginfo(f"Action failed with state: {state}")
+            return False
+    
+    def cancel_goal(self):
+        """Cancel the current goal"""
+        self.client.cancel_goal()
+        rospy.loginfo("Goal cancellation requested")
+
+def main():
+    rospy.init_node('pick_place_client')
+    
+    # Create client
+    client = PickPlaceClient()
+    
+    # Get object name and target position from command line or use defaults
+    if len(sys.argv) >= 5:
+        object_name = sys.argv[1]
+        target_x = float(sys.argv[2])
+        target_y = float(sys.argv[3])
+        target_z = float(sys.argv[4])
+    else:
+        object_name = "box"
+        target_x = 2.0
+        target_y = 1.0
+        target_z = 0.5
+        rospy.loginfo("Using default values: box at (2.0, 1.0, 0.5)")
+    
+    # Send goal
+    action_client = client.send_goal(object_name, target_x, target_y, target_z)
+    
+    # Wait for result
+    success = client.wait_for_result()
+    
+    if success:
+        rospy.loginfo("Pick and place operation completed successfully!")
+    else:
+        rospy.loginfo("Pick and place operation failed or was cancelled")
+
+if __name__ == '__main__':
+    try:
+        main()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Pick Place Client interrupted")
+
+
+pick_place_client_cancel_demo.py:
+#!/usr/bin/env python3
+
+import rospy
+import actionlib
+import threading
+import time
+from pick_place_robot.msg import PickPlaceAction, PickPlaceGoal
+from geometry_msgs.msg import Pose, Point, Quaternion
+
+class PickPlaceCancelDemo:
+    def __init__(self):
+        # Create action client
+        self.client = actionlib.SimpleActionClient('pick_place_action', PickPlaceAction)
+        
+        # Wait for server to start
+        rospy.loginfo("Waiting for pick_place_action server...")
+        self.client.wait_for_server()
+        rospy.loginfo("Connected to pick_place_action server")
+        
+    def send_goal_and_cancel(self):
+        """Send a goal and cancel it after some time"""
+        # Create goal message
+        goal = PickPlaceGoal()
+        goal.object_name = "test_object"
+        
+        # Set target pose
+        goal.target_pose = Pose()
+        goal.target_pose.position = Point(3.0, 2.0, 1.0)
+        goal.target_pose.orientation = Quaternion(0, 0, 0, 1)
+        
+        rospy.loginfo("Sending goal for cancellation demo...")
+        
+        # Send goal with feedback callback
+        self.client.send_goal(goal, feedback_cb=self.feedback_callback)
+        
+        # Start a timer to cancel the goal after 4 seconds
+        cancel_timer = threading.Timer(4.0, self.cancel_goal)
+        cancel_timer.start()
+        
+        # Wait for result
+        self.client.wait_for_result()
+        
+        # Get result
+        result = self.client.get_result()
+        state = self.client.get_state()
+        
+        if state == actionlib.GoalStatus.SUCCEEDED:
+            rospy.loginfo(f"Action succeeded: {result.message}")
+        elif state == actionlib.GoalStatus.PREEMPTED:
+            rospy.loginfo("Action was successfully cancelled")
+        else:
+            rospy.loginfo(f"Action ended with state: {state}")
+    
+    def feedback_callback(self, feedback):
+        """Callback for receiving feedback"""
+        rospy.loginfo(f"Feedback: {feedback.current_phase} - Progress: {feedback.progress_percentage:.1f}%")
+    
+    def cancel_goal(self):
+        """Cancel the current goal"""
+        rospy.loginfo("*** CANCELLING GOAL ***")
+        self.client.cancel_goal()
+
+def main():
+    rospy.init_node('pick_place_cancel_demo')
+    
+    # Create demo client
+    demo = PickPlaceCancelDemo()
+    # Run cancellation demo
+    demo.send_goal_and_cancel()
+
+if __name__ == '__main__':
+    try:
+        main()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Cancel demo interrupted")
+
+
+Spawn a New Turtle (turtle2)
+(Open another terminal)
+rosservice call /spawn 5.0 5.0 0.0 "turtle2"
+
+
+rostopic pub /turtle2/cmd_vel geometry_msgs/Twist "linear:
+  x: 2.0
+  y: 0.0
+  z: 0.0
+angular:
+  x: 0.0
+  y: 0.0
+  z: 1.8" -r 10
+Teleport turtle1 to an Absolute Position
+rosservice call /turtle1/teleport_absolute 5.5 5.5 0.0
+Teleport turtle1 to a Relative Position
+rosservice call /turtle1/teleport_relative 2.0 1.57
+
+turtle1’s Current Pose
+rostopic echo /turtle1/pose
+Kill turtle2
+rosservice call /kill "turtle2"
+rosservice call /turtle1/set_pen 255 0 0 3 0
+
+Collision avoidance 
+Avoid_turtle.py:
+#!/usr/bin/env python3
+import rospy
+import random
+import math
+from turtlesim.srv import Spawn
+from geometry_msgs.msg import Twist
+from turtlesim.msg import Pose
+
+class AvoidTurtles:
+    def __init__(self):
+        rospy.init_node("avoid_turtles", anonymous=True)
+        self.pub = rospy.Publisher("/turtle1/cmd_vel", Twist, queue_size=10)
+
+        rospy.Subscriber("/turtle1/pose", Pose, self.update_pose)
+        rospy.Subscriber("/turtle2/pose", Pose, self.update_enemy_pose, callback_args="turtle2")
+        rospy.Subscriber("/turtle3/pose", Pose, self.update_enemy_pose, callback_args="turtle3")
+        rospy.Subscriber("/turtle4/pose", Pose, self.update_enemy_pose, callback_args="turtle4")
+
+        self.pose = Pose()
+        self.enemies = {"turtle2": Pose(), "turtle3": Pose(), "turtle4": Pose()}
+        self.rate = rospy.Rate(10)
+
+    def update_pose(self, data):
+        self.pose = data
+
+    def update_enemy_pose(self, data, name):
+        self.enemies[name] = data
+
+    def distance(self, p1, p2):
+        return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
+
+    def wall_vector(self):
+        """Repulsive vector from walls"""
+        vec_x, vec_y = 0.0, 0.0
+        margin = 1.0
+        max_coord = 11.0
+        if self.pose.x < margin: vec_x += (margin - self.pose.x) * 5
+        if self.pose.x > max_coord - margin: vec_x -= (self.pose.x - (max_coord - margin)) * 5
+        if self.pose.y < margin: vec_y += (margin - self.pose.y) * 5
+        if self.pose.y > max_coord - margin: vec_y -= (self.pose.y - (max_coord - margin)) * 5
+        return vec_x, vec_y
+
+    def enemy_vector(self):
+        """Repulsive vector from other turtles"""
+        vec_x, vec_y = 0.0, 0.0
+        for enemy in self.enemies.values():
+            dist = self.distance(self.pose, enemy)
+            if 0 < dist < 2.0:
+                repulse = (2.0 - dist) * 2
+                vec_x -= repulse * (enemy.x - self.pose.x) / dist
+                vec_y -= repulse * (enemy.y - self.pose.y) / dist
+        return vec_x, vec_y
+
+    def move(self):
+        vel = Twist()
+        wx, wy = self.wall_vector()
+        ex, ey = self.enemy_vector()
+
+        total_x = wx + ex
+        total_y = wy + ey
+
+        if total_x != 0 or total_y != 0:
+            target_angle = math.atan2(total_y, total_x)
+            angle_diff = target_angle - self.pose.theta
+            while angle_diff > math.pi: angle_diff -= 2*math.pi
+            while angle_diff < -math.pi: angle_diff += 2*math.pi
+            vel.angular.z = angle_diff * 2.0
+            vel.linear.x = max(0.5, 2.0 - math.hypot(total_x, total_y))
+        else:
+            vel.linear.x = 2.0
+            vel.angular.z = random.uniform(-1.0, 1.0)
+
+        self.pub.publish(vel)
+        self.rate.sleep()
+
+    def run(self, runtime=20):
+        start_time = rospy.Time.now().to_sec()
+        while not rospy.is_shutdown():
+            if rospy.Time.now().to_sec() - start_time > runtime:
+                rospy.loginfo("Stopping turtle movement after %d seconds" % runtime)
+                stop_cmd = Twist()
+                self.pub.publish(stop_cmd)
+                break
+            self.move()
+
+if __name__ == "__main__":
+    try:
+        rospy.wait_for_service("spawn")
+        spawner = rospy.ServiceProxy("spawn", Spawn)
+        for name in ["turtle2", "turtle3", "turtle4"]:
+            x = random.uniform(1.0, 10.0)
+            y = random.uniform(1.0, 10.0)
+            theta = random.uniform(0, 2*math.pi)
+            spawner(x, y, theta, name)
+
+        controller = AvoidTurtles()
+        controller.run(runtime=20)
+    except rospy.ROSInterruptException:
+        pass
+
+
+
+
+
