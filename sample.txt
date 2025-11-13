@@ -459,10 +459,23 @@ if __name__ == '__main__':
         rospy.loginfo("Cancel demo interrupted")
 
 
+Launch Turtlesim Node
+rosrun turtlesim turtlesim_node
+
 Spawn a New Turtle (turtle2)
 (Open another terminal)
 rosservice call /spawn 5.0 5.0 0.0 "turtle2"
 
+Change Pen Settings of turtle1
+Set pen color to red with width 3:
+rosservice call /turtle1/set_pen 255 0 0 3 0
+
+Launch turtlesim_node
+rosrun turtlesim turtlesim_node
+
+
+ Display turtle1’s Current Pose
+rostopic echo /turtle1/pose
 
 rostopic pub /turtle2/cmd_vel geometry_msgs/Twist "linear:
   x: 2.0
@@ -586,6 +599,166 @@ if __name__ == "__main__":
         pass
 
 
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionServer
+from turtlesim.srv import Spawn
+from turtlesim.msg import Pose
+from geometry_msgs.msg import Twist
+from example_interfaces.action import Fibonacci   # placeholder action type
+import random
+import math
+import time
+
+turtle_action_server.py
+class TurtleActionServer(Node):
+    def __init__(self):
+        super().__init__('turtle_action_server')
+
+        # Action server
+        self._action_server = ActionServer(
+            self,
+            Fibonacci,
+            'turtle_straight_line',
+            self.execute_callback
+        )
+
+        # Subscribers and publishers
+        self.pose_sub = self.create_subscription(Pose, '/turtle1/pose', self.pose_callback, 10)
+        self.cmd_pub = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
+
+        self.main_pose = None
+        self.spawned_turtles = []
+        self.get_logger().info("Turtle Action Server ready.")
+
+    def pose_callback(self, msg):
+        self.main_pose = (msg.x, msg.y)
+
+    def spawn_turtles(self):
+        client = self.create_client(Spawn, 'spawn')
+        while not client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for spawn service...')
+        for i in range(6):
+            req = Spawn.Request()
+            req.x = random.uniform(1.0, 10.0)
+            req.y = random.uniform(1.0, 10.0)
+            req.theta = 0.0
+            req.name = f"turtle_{i+2}"
+            future = client.call_async(req)
+            rclpy.spin_until_future_complete(self, future)
+            self.spawned_turtles.append((req.x, req.y))
+            self.get_logger().info(f"Spawned {req.name} at ({req.x:.2f}, {req.y:.2f})")
+
+    async def execute_callback(self, goal_handle):
+        self.get_logger().info("Goal received — Spawning 6 turtles...")
+        self.spawn_turtles()
+
+        feedback_msg = Fibonacci.Feedback()
+        visited = [False] * len(self.spawned_turtles)
+
+        # Set turtle to move straight
+        cmd = Twist()
+        cmd.linear.x = 1.0
+        cmd.angular.z = 0.0
+
+        self.get_logger().info("Starting straight movement along +x axis...")
+
+        start_time = time.time()
+        while rclpy.ok():
+            if self.main_pose is None:
+                continue
+
+            # publish forward motion
+            self.cmd_pub.publish(cmd)
+            mx, my = self.main_pose
+
+            # check if y coordinate matches any turtle's y (passing)
+            for i, (tx, ty) in enumerate(self.spawned_turtles):
+                if not visited[i] and abs(my - ty) < 0.1:
+                    visited[i] = True
+                    feedback_msg.partial_sequence = [i]
+                    goal_handle.publish_feedback(feedback_msg)
+                    self.get_logger().info(
+                        f"🟢 Passed turtle_{i+2} at ({tx:.2f}, {ty:.2f}) — main_y={my:.2f}"
+                    )
+
+            # stop if all turtles passed or time over
+            if all(visited) or (time.time() - start_time > 25):
+                break
+
+            await rclpy.sleep(0.1)
+
+        cmd.linear.x = 0.0
+        self.cmd_pub.publish(cmd)
+
+        goal_handle.succeed()
+        result = Fibonacci.Result()
+        result.sequence = [1]
+        self.get_logger().info("✅ All turtles passed or time limit reached. Action complete.")
+        return result
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TurtleActionServer()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
+
+turtle_action_client.py
+
+import rclpy
+from rclpy.node import Node
+from rclpy.action import ActionClient
+from example_interfaces.action import Fibonacci
+
+
+class TurtleActionClient(Node):
+    def __init__(self):
+        super().__init__('turtle_action_client')
+        self._action_client = ActionClient(self, Fibonacci, 'turtle_straight_line')
+
+    def send_goal(self):
+        goal_msg = Fibonacci.Goal()
+        self._action_client.wait_for_server()
+        self._send_goal_future = self._action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback
+        )
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected.')
+            return
+        self.get_logger().info('Goal accepted.')
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info(f"Main turtle passed turtle index: {feedback.partial_sequence}")
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info("✅ Action completed.")
+        rclpy.shutdown()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TurtleActionClient()
+    node.send_goal()
+    rclpy.spin(node)
+
+
+if __name__ == '__main__':
+    main()
 
 
 
