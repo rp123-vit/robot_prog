@@ -1,3 +1,13 @@
+mkdir -p ~/catkin_ws/src
+cd ~/catkin_ws/src
+catkin_create_pkg lab2_pkg rospy std_msgs
+cd ~/catkin_ws
+catkin_make
+nano ~/.bashrc
+source ~/catkin_ws/devel/setup.bash
+chmod +x distance_publisher.py 
+
+
 Publisher:
 #!/usr/bin/env python3
 import rospy
@@ -759,6 +769,7 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
 
 
 
